@@ -536,9 +536,9 @@
       x.fillText(sub, 26, 276);
       return c;
     },
-    captionX: 0.3,
+    captionX: 0.27,
     captionY: 0.42,
-    captionMax: 760,
+    captionMax: 700,
     zoom(lt) { return 1 + 0.24 * easeInOut(lt / 21.3); },
     drawPhone(ctx, T, screenOn) {
       const P = PHONE;
@@ -847,6 +847,7 @@
       this.motes = depthField(90, 87, { colors: ['rgb(255,248,220)'], r: [1.5, 26], a: [0.6, 0.32], vy: -24, twinkle: true });
       this.far = WC.blurred(this.far, 1.2);
       this.fg = grassFG(W + 500, 340, 'rgb(92,66,38)', 88, 9);
+      this.captionMax = 1760;
       [this.petal] = layer(40, 30);
       WC.blob(this.petal.getContext('2d'), WC.ellipse(20, 15, 14, 8, 10), 'rgb(240,160,170)', { seed: 86, layers: 14, alpha: 0.15, variance: 0.05, grain: 0.1 });
       this.petals = Array.from({ length: 30 }, () => [rng() * W, rng.range(-200, -20), rng.range(50, 90), rng() * 6, rng.range(0.6, 1.2)]);

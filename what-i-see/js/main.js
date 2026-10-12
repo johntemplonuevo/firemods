@@ -22,7 +22,7 @@
     big:      { font: '600 104px "Cormorant Garamond"', color: '#1d1f33', y: 0.5, track: 1 },
     light:    { font: '500 56px "Cormorant Garamond"', color: '#f6eddb', y: 0.86, shadow: 'rgba(0,0,8,0.95)', max: 1500, sceneY: true },
     lightbig: { font: '600 80px "Cormorant Garamond"', color: '#fbf3e3', y: 0.86, shadow: 'rgba(0,0,8,0.95)', max: 1600, sceneY: true },
-    body:     { font: '500 56px "Cormorant Garamond"', color: '#fdf6e8', y: 0.87, shadow: 'rgba(25,18,10,0.95)', max: 1500, sceneY: true },
+    body:     { font: '500 56px "Cormorant Garamond"', color: '#fdf6e8', y: 0.87, shadow: 'rgba(25,18,10,0.95)', shadowA: 0.9, max: 1500, sceneY: true },
   };
 
   function sceneIndexAt(t) {
@@ -110,7 +110,7 @@
           ctx.shadowColor = st.shadow;
           ctx.shadowBlur = 26;
           ctx.fillStyle = st.shadow;
-          ctx.globalAlpha = a * 0.55;
+          ctx.globalAlpha = a * (st.shadowA ?? 0.55);
           ctx.fillText(ln, xc, y0 + i * lh);
           ctx.restore();
         }
