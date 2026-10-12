@@ -1,0 +1,6 @@
+out/stills/
+out/*.jpg
+out/*.png
+out/render.log
+out/video-only.mp4
+audio/soundtrack.wav

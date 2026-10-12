@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What I See</title>
+<style>
+  @font-face { font-family: "Cormorant Garamond"; font-weight: 500; font-style: normal; src: url(fonts/cormorant-garamond-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Cormorant Garamond"; font-weight: 500; font-style: italic; src: url(fonts/cormorant-garamond-latin-500-italic.woff2) format("woff2"); }
+  @font-face { font-family: "Cormorant Garamond"; font-weight: 600; font-style: normal; src: url(fonts/cormorant-garamond-latin-600-normal.woff2) format("woff2"); }
+  @font-face { font-family: "Caveat"; font-weight: 500; font-style: normal; src: url(fonts/caveat-latin-500-normal.woff2) format("woff2"); }
+  html, body { margin: 0; height: 100%; background: #16141c; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font-family: "Cormorant Garamond", serif; }
+  #wrap { position: relative; width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; }
+  #stage { width: 100%; height: 100%; display: block; background: #f4ead8; }
+  #play, #status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+  #play { font: 600 28px "Cormorant Garamond", serif; padding: 14px 34px; border-radius: 40px; border: 0;
+          background: rgba(35,36,58,0.85); color: #f4ead8; cursor: pointer; letter-spacing: 2px; }
+  #status { color: #5d5768; font: italic 500 26px "Cormorant Garamond", serif; }
+  #track { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,0.15); }
+  #bar { height: 100%; width: 0; background: rgba(236,180,96,0.9); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="stage"></canvas>
+  <div id="status">painting the scenes&hellip;</div>
+  <button id="play" hidden>&#9654; Play</button>
+  <div id="track"><div id="bar"></div></div>
+</div>
+<audio id="music" src="audio/soundtrack.mp3" preload="auto"></audio>
+<script src="timeline.js"></script>
+<script src="js/watercolor.js"></script>
+<script src="js/scenes.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
