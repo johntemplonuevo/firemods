@@ -31,10 +31,14 @@
     return 0;
   }
 
+  // scenes are written in base (un-stretched) time: convert before drawing
   function drawScene(target, i, t) {
     const s = TL.scenes[i];
+    const f = s.stretch || 1;
+    const lt = (t - s.start) / f;
+    const base = s.base ? s.base[0] : s.start;
     target.save();
-    SC[s.id].draw(target, t - s.start, t);
+    SC[s.id].draw(target, lt, base + lt);
     target.restore();
   }
 

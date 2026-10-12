@@ -6,8 +6,11 @@ piano, koto (Karplus-Strong), shakuhachi-like flute, strings, choir pad,
 bells, synth plucks, plus foley (wind, birds, stream, pings, swipes,
 page turns, pen scratching, a match strike...).
 
-Cue times come from ../timeline.js, the same file the animation uses,
-so music and picture stay in sync.
+The score below is written in the story's *base* timing (story.js). It is
+mapped onto the stretched timeline (timeline.js, built around the narration)
+by W(), the same way the animation is, so music and picture stay in sync.
+The Kokoro narration (narration/lines/*.wav) is mixed on top, with the music
+ducked under the voice.
 
     python3 audio/compose.py          -> audio/soundtrack.wav (+ .mp3 if ffmpeg exists)
 """
@@ -27,6 +30,20 @@ ROOT = os.path.dirname(HERE)
 with open(os.path.join(ROOT, "timeline.js"), encoding="utf-8") as f:
     TL = json.loads(re.search(r"=\s*(\{.*\})\s*;", f.read(), re.S).group(1))
 
+
+def W(x):
+    """story (base) time -> timeline time: each scene is stretched by its own factor."""
+    for s in TL["scenes"]:
+        bs, be = s["base"]
+        if x < be or s is TL["scenes"][-1]:
+            return s["start"] + (x - bs) * s["stretch"]
+
+
+def S(t0, d):
+    """a base-time duration starting at t0, measured in timeline time"""
+    return W(t0 + d) - W(t0)
+
+
 DUR = TL["duration"] + 1.0
 N = int(DUR * SR)
 rng = np.random.default_rng(2024)
@@ -45,9 +62,9 @@ def bus():
     return np.zeros((2, N))
 
 
-def place(buf, t, sig, pan=0.0, gain=1.0):
-    """Mix a mono (or stereo) signal into buf at time t with equal-power pan."""
-    i = int(round(t * SR))
+def place(buf, t, sig, pan=0.0, gain=1.0, warp=True):
+    """Mix a mono (or stereo) signal into buf at base time t with equal-power pan."""
+    i = int(round((W(t) if warp else t) * SR))
     if i >= N:
         return
     if sig.ndim == 1:
@@ -404,12 +421,14 @@ pre = bus()    # music before the phone is switched off (cut hard at 50.3)
 post = bus()   # music after
 amb = bus()    # ambience
 fx = bus()     # sound effects
-CUT = next(s["start"] for s in TL["scenes"] if s["id"] == "dark")
+DARK = next(s for s in TL["scenes"] if s["id"] == "dark")
+CUT = DARK["base"][0]      # the phone click, in base time
+CUT_NEW = DARK["start"]    # ... and in timeline time
 
 
 def chords(buf, prog, vol, **kw):
     for t0, t1, notes in prog:
-        place(buf, t0, pad(notes, t1 - t0, vol=vol, **kw))
+        place(buf, t0, pad(notes, W(t1) - W(t0), vol=vol, **kw))
 
 
 def melody(buf, notes, inst=piano, pan=0.15, vel=0.5):
@@ -476,14 +495,14 @@ while bar0 + b * BAR < CUT:
         if tk < CUT and ((tk >= 42.0 and beat % 2 == 0) or tk >= 46.0):
             place(pre, tk, kick(0.5 + 0.2 * (tk > 46)))
     b += 1
-dr_t = tvec(CUT - 29.0)
+dr_t = tvec(W(CUT) - W(29.0))
 drone = (np.sin(2 * np.pi * mtof(26) * dr_t) + 0.6 * np.sin(2 * np.pi * mtof(33) * 1.003 * dr_t)
          + 0.3 * np.sin(2 * np.pi * mtof(38) * 0.997 * dr_t))
 drone *= (0.08 + 0.12 * np.clip((dr_t - 6) / 15, 0, 1) ** 2) * fade_env(len(dr_t), 2.0, 0.0)
 place(pre, 29.0, drone)
 chords(pre, [(45.6, CUT + 0.3, [62, 63, 65, 68, 70])], 0.9, attack=3.5, release=0.2, bright=12, vib=0.004)
-rise_t = tvec(CUT - 44.0)
-riser = stft_filter(rng.standard_normal(len(rise_t)), lambda tc, f: band(300 + 5000 * (max(tc, 0) / (CUT - 44.0)) ** 2, 0.8)(f))
+rise_t = tvec(W(CUT) - W(44.0))
+riser = stft_filter(rng.standard_normal(len(rise_t)), lambda tc, f: band(300 + 5000 * (max(tc, 0) / rise_t[-1]) ** 2, 0.8)(f))
 place(pre, 44.0, riser * (rise_t / rise_t[-1]) ** 2 * 0.22)
 
 # D. silence after the click, a single note, then dawn
@@ -518,6 +537,7 @@ arp(post, 79.6, 84.8, [62, 66, 69, 74, 76, 74, 69, 66], 0.4, 0.14)
 progG = [(85.0, 4.1, [43, 55, 59, 62, 67]), (89.0, 4.1, [42, 54, 57, 62, 66]), (93.0, 4.1, [40, 52, 55, 59, 62, 66]),
          (97.0, 2.1, [45, 52, 57, 62, 64]), (99.0, 2.4, [45, 52, 57, 61, 64])]
 for i, (t0, d, notes) in enumerate(progG):
+    d = S(t0, d)
     place(post, t0, pad(notes, d, vol=0.8 + 0.12 * i, attack=1.2, release=1.6, bright=12, vib=0.003))
     if t0 >= 89:
         place(post, t0, pad([n + 12 for n in notes[1:4]], d, vol=0.5 + 0.1 * i, attack=1.4, release=1.6, formant=True, vib=0.004))
@@ -538,6 +558,7 @@ melody(post, [(101.5, 74, 1.4), (103.0, 73, 0.8), (103.8, 71, 1.2), (105.2, 71, 
 # I. Amen (G - A - D, full and warm)
 progI = [(112.0, 4.1, [43, 55, 59, 62, 67]), (116.0, 4.9, [45, 57, 61, 64, 69]), (120.8, 4.5, [38, 50, 57, 62, 66, 69, 74])]
 for i, (t0, d, notes) in enumerate(progI):
+    d = S(t0, d)
     place(post, t0, pad(notes, d, vol=0.9 + 0.15 * i, attack=1.0 if i < 2 else 0.4, release=2.5, bright=12, vib=0.003))
     place(post, t0, pad([n + 12 for n in notes[1:4]], d, vol=0.6 + 0.1 * i, attack=1.2, release=2.5, formant=True, vib=0.004))
     place(post, t0, piano(notes[0], d, 0.35), pan=-0.3)
@@ -549,9 +570,9 @@ place(post, 121.0, piano(62, 3.5, 0.35), pan=-0.1)
 
 # ---------------------------------------------------------------- ambience
 w0, w1 = 54.4, 79.6
-wd = wind(w1 - w0)
+wd = wind(W(w1) - W(w0))
 place(amb, w0, np.vstack([wd, np.roll(wd, 3000)]) * fade_env(len(wd), 2.0, 1.5) * 0.11)
-st = stream(78.6 - 57.0)
+st = stream(W(78.6) - W(57.0))
 place(amb, 57.0, st * fade_env(len(st), 2.5, 2.0), pan=-0.4)
 tb = 56.5
 while tb < 77.5:
@@ -561,7 +582,7 @@ for tb in (87.2, 92.5, 96.4):
     place(amb, tb, bird_call() * 0.6, pan=rng.uniform(-0.6, 0.6))
 room = fft_filter(rng.standard_normal(int(4.7 * SR)), lowpass(400)) * 0.004
 place(amb, CUT + 0.15, room * fade_env(len(room), 0.6, 1.0))
-gt = tvec(13.0)
+gt = tvec(W(125.0) - W(112.0))
 crack = np.zeros_like(gt)  # the lamp quietly crackling at the end
 for _ in range(60):
     k = rng.integers(int(1.2 * SR), len(gt) - 200)
@@ -570,7 +591,7 @@ place(amb, 112.0, fft_filter(crack, highpass(1500)) * 0.12, pan=0.05)
 
 # ---------------------------------------------------------------- sound effects from the timeline
 for e in TL["sfx"]:
-    t, kind = e["t"], e["type"]
+    t, kind = e["base"], e["type"]
     if kind == "bloom":
         place(fx, t - 0.1, sfx_whoosh(1.6, 220, 1100, 0.07), pan=rng.uniform(-0.3, 0.3))
     elif kind == "ping":
@@ -595,19 +616,59 @@ for e in TL["sfx"]:
     elif kind == "pen":
         place(fx, t, sfx_pen(e.get("dur", 2.0)), pan=0.2)
 
+# ---------------------------------------------------------------- narration
+def read_wav(path):
+    with wave.open(path) as w:
+        sr, ch = w.getframerate(), w.getnchannels()
+        a = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(float) / 32768
+    a = a.reshape(-1, ch).mean(1)
+    if sr != SR:  # resample (linear) then remove the imaging above the old Nyquist
+        a = np.interp(np.arange(int(len(a) * SR / sr)) * sr / SR, np.arange(len(a)), a)
+        a = fft_filter(a, lowpass(0.45 * sr, 4))
+    return a
+
+
+voice = bus()
+for n in TL["narration"]:
+    a = read_wav(os.path.join(ROOT, n["file"]))
+    a = fft_filter(a, lambda f: highpass(90, 2)(f) * (1 + 0.25 * band(3500, 1.0)(f)))  # clean low end, a little presence
+    a /= np.sqrt(np.mean(a[np.abs(a) > 0.02] ** 2)) + 1e-9                         # every line at the same loudness
+    place(voice, n["t"], a, pan=0.0, warp=False)
+
 # ---------------------------------------------------------------- mix
 print("mixing and adding reverb...")
-cut_i = int(CUT * SR)
+cut_i = int(CUT_NEW * SR)
 pre_mix = pre + reverb(pre, 2.6) * 0.35
 pre_mix[:, cut_i:] = 0                                   # the phone click kills everything
 pre_mix[:, cut_i - 300:cut_i] *= np.linspace(1, 0, 300)
 post_mix = post + reverb(post, 3.2, seed=8) * 0.45
 fx_mix = fx + reverb(fx, 1.8, seed=9) * 0.25
-mix = pre_mix + post_mix + amb + fx_mix
+bed = pre_mix + post_mix + amb + fx_mix
+voice_mix = voice + reverb(voice, 1.1, damp=6000, seed=10) * 0.1
 
-# gentle master: normalise, soft-clip, fade at the very end
+
+def rms_db(x, active_only=False):
+    m = x.mean(0)
+    if active_only:
+        m = m[np.abs(m) > 0.05 * np.max(np.abs(m))]
+    return 20 * np.log10(np.sqrt(np.mean(m ** 2)) + 1e-12)
+
+
+bed *= 10 ** ((-21 - rms_db(bed)) / 20)
+voice_mix *= 10 ** ((-16 - rms_db(voice_mix, True)) / 20)
+
+# duck the music ~8 dB while the narrator speaks (smooth attack/release)
+talk = np.zeros(N)
+for n in TL["narration"]:
+    a, b = int((n["t"] - 0.25) * SR), int((n["t"] + n["dur"] + 0.35) * SR)
+    talk[max(0, a):min(N, b)] = 1
+k = np.hanning(int(0.5 * SR))
+talk = np.convolve(talk, k / k.sum(), mode="same")
+mix = bed * (1 - 0.6 * talk) + voice_mix
+
+# gentle master: soft-clip, fade at the very end
 mix /= np.max(np.abs(mix)) + 1e-9
-mix = np.tanh(mix * 1.25) / np.tanh(1.25)
+mix = np.tanh(mix * 1.4) / np.tanh(1.4)
 mix *= 0.93
 end = mix.shape[1]
 f_out = int(2.5 * SR)

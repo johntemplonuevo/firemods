@@ -6,7 +6,8 @@
   const { W, H } = WC;
   const TL = global.TIMELINE;
   const { clamp, lerp, ramp, smooth, easeOut, easeInOut } = WC;
-  const sfxTimes = (type) => TL.sfx.filter((e) => e.type === type).map((e) => e.t);
+  // scenes think in the story's base timing; the engine converts from the stretched timeline
+  const sfxTimes = (type) => TL.sfx.filter((e) => e.type === type).map((e) => e.base ?? e.t);
   const CREAM = '#f4ead8';
 
   // ---------- shared drawing helpers ----------
@@ -68,6 +69,69 @@
     const [c, x] = layer();
     WC.wash(x, W, H, [[0, '#f7efdf'], [1, '#f1e5cf']], seed, { mottle: 0.1, blooms: 0, tint: 'rgb(170,140,100)' });
     return c;
+  }
+
+  // ---------- depth: things at different distances from the "camera" ----------
+  // Particles with a depth z (0 = far, 1 = right in front of the lens):
+  // near ones are bigger, blurrier, and slide further when the camera moves.
+  function depthField(n, seed, o) {
+    const rng = WC.rng(seed);
+    const parts = [];
+    for (let i = 0; i < n; i++) {
+      parts.push({ x: rng(), y: rng(), z: rng(), ph: rng() * 6.283, sp: rng.range(0.6, 1.4), ci: Math.floor(rng() * o.colors.length) });
+    }
+    parts.sort((a, b) => a.z - b.z);
+    const sprites = o.colors.map((c) => [0.1, 0.45, 0.95].map((sf) => WC.bokeh(c, sf)));
+    return {
+      draw(ctx, t, cam = [0, 0], alpha = 1, zMin = 0, zMax = 1.01) {
+        if (alpha <= 0) return;
+        ctx.save();
+        ctx.globalCompositeOperation = o.mode ?? 'screen';
+        const spanX = W + 400, spanY = H + 300;
+        for (const p of parts) {
+          if (p.z < zMin || p.z >= zMax) continue;
+          const par = 0.3 + 1.7 * p.z;
+          const r = lerp(o.r[0], o.r[1], p.z * p.z);
+          let x = p.x * spanX + cam[0] * par + (o.vx ?? 0) * t * p.sp * par + Math.sin(t * 0.5 + p.ph) * 10 * par;
+          let y = p.y * spanY + cam[1] * par + (o.vy ?? 0) * t * p.sp * par + Math.cos(t * 0.4 + p.ph) * 6 * par;
+          x = ((x % spanX) + spanX) % spanX - 200;
+          y = ((y % spanY) + spanY) % spanY - 150;
+          const tw = o.twinkle ? 0.6 + 0.4 * Math.sin(t * 2.1 + p.ph * 3) : 1;
+          ctx.globalAlpha = clamp(alpha * tw * lerp(o.a[0], o.a[1], p.z));
+          ctx.drawImage(sprites[p.ci][p.z < 0.35 ? 0 : p.z < 0.7 ? 1 : 2], x - r, y - r, 2 * r, 2 * r);
+        }
+        ctx.restore();
+      },
+    };
+  }
+
+  // out-of-focus grass right in front of the lens (thick at both sides, open in the middle)
+  function grassFG(w, h, color, seed, blur) {
+    const [c, x] = layer(w, h);
+    const rng = WC.rng(seed);
+    x.fillStyle = color;
+    for (let i = 0; i < 340; i++) {
+      const u = rng() < 0.5 ? Math.pow(rng(), 1.8) * 0.26 : 1 - Math.pow(rng(), 1.8) * 0.26;
+      const edge = Math.min(u, 1 - u) / 0.26;
+      const bx = u * w, len = h * rng.range(0.35, 1) * (1 - 0.6 * edge), wd = rng.range(12, 30);
+      const bend = rng.gauss() * len * 0.25;
+      x.beginPath();
+      x.moveTo(bx - wd, h + 5);
+      x.quadraticCurveTo(bx - wd * 0.3 + bend * 0.4, h - len * 0.55, bx + bend, h - len);
+      x.quadraticCurveTo(bx + wd * 0.3 + bend * 0.4, h - len * 0.55, bx + wd, h + 5);
+      x.closePath();
+      x.globalAlpha = rng.range(0.6, 1);
+      x.fill();
+    }
+    return WC.blurred(c, blur);
+  }
+
+  // draw something with a camera zoom scaled by its depth (1 = the main subject plane)
+  function atDepth(ctx, zoom, depth, cx, cy, fn) {
+    ctx.save();
+    zoomAbout(ctx, 1 + (zoom - 1) * depth, cx, cy);
+    fn();
+    ctx.restore();
   }
 
   // a clay oil lamp, side view, painted
@@ -151,19 +215,23 @@
         WC.blob(dx, WC.ellipse(W / 2 + Math.cos(a) * R, H / 2 + Math.sin(a) * R * 0.6, r, r, 8), rng() < 0.5 ? 'rgb(140,170,205)' : 'rgb(232,180,100)', { seed: 15 + i, layers: 14, alpha: 0.1, variance: 0.1 });
       }
       this.drops = d;
+      this.flecks = depthField(30, 17, { colors: ['rgb(120,150,195)', 'rgb(222,170,90)'], r: [2, 46], a: [0.5, 0.2], mode: 'multiply', vy: -7 });
     },
     draw(ctx, lt) {
+      // a slow sideways camera drift: far layers move a little, near layers a lot
+      const cx = Math.sin(lt * 0.33) * 34, cy = Math.cos(lt * 0.27) * 12;
       ctx.drawImage(this.bg, 0, 0);
       const zb = 0.7 + 0.32 * easeOut(lt / 4.5);
-      drawCentered(ctx, this.blue, W / 2, H / 2, zb, easeOut(lt / 2.5) * 0.85, 'multiply');
+      drawCentered(ctx, this.blue, W / 2 + cx * 0.3, H / 2 + cy * 0.3, zb, easeOut(lt / 2.5) * 0.85, 'multiply');
       const zg = 0.55 + 0.47 * easeOut((lt - 0.7) / 4.5);
       ctx.save();
       ctx.translate(W / 2, H / 2);
       ctx.rotate(Math.sin(lt * 0.2) * 0.03);
       ctx.translate(-W / 2, -H / 2);
-      drawCentered(ctx, this.gold, W / 2, H / 2, zg, easeOut((lt - 0.7) / 2.5) * 0.8);
+      drawCentered(ctx, this.gold, W / 2 + cx * 0.55, H / 2 + cy * 0.55, zg, easeOut((lt - 0.7) / 2.5) * 0.8);
       ctx.restore();
-      drawCentered(ctx, this.drops, W / 2, H / 2, 1 + lt * 0.006, ramp(lt, 1.5, 4.5) * 0.8, 'multiply');
+      drawCentered(ctx, this.drops, W / 2 + cx, H / 2 + cy, 1 + lt * 0.012, ramp(lt, 1.5, 4.5) * 0.8, 'multiply');
+      this.flecks.draw(ctx, lt, [cx * 1.6, cy * 1.6], ramp(lt, 0.5, 2.5));
     },
     captionY: null,
   };
@@ -201,6 +269,7 @@
       }
       this.iris = ir;
       this.lidJit = Array.from({ length: 6 }, () => [rng.gauss() * 5, rng.gauss() * 5, rng.range(3, 8)]);
+      this.dust = depthField(90, 211, { colors: ['rgb(255,222,160)', 'rgb(170,190,255)'], r: [1.5, 34], a: [0.55, 0.28], vy: -14, twinkle: true });
     },
     eyePath(ctx, open) {
       const { ex, ey, rx, ry } = this;
@@ -215,9 +284,14 @@
       const flameOn = ramp(lt, 2.1, 3.0);
       const light = ramp(lt, 5.5, 8.5) * (1 - ramp(lt, 9.6, 12));
       const dim = ramp(lt, 9.6, 13);
+      const dolly = easeInOut(lt / 13);
+      const dustA = 0.35 + 0.65 * Math.max(flameOn * 0.5, light) * (1 - 0.7 * dim);
+      atDepth(ctx, 1 + 0.07 * dolly, 0.4, this.ex, this.ey, () => {
+        ctx.drawImage(this.bg, -40, -25, W + 80, H + 50);
+        this.dust.draw(ctx, lt, [0, 0], dustA, 0, 0.5);
+      });
       ctx.save();
-      zoomAbout(ctx, 1 + 0.07 * easeInOut(lt / 13), this.ex, this.ey);
-      ctx.drawImage(this.bg, 0, 0);
+      zoomAbout(ctx, 1 + 0.07 * dolly, this.ex, this.ey);
       glow(ctx, this.ex, this.ey, 650, 'rgba(255,215,150,0.5)', flameOn * 0.35 + light * 0.3);
       // golden flood: "your whole body benefits from the light"
       drawCentered(ctx, this.gold, W / 2, H / 2, 0.55 + 0.6 * light, light * 0.75, 'lighter');
@@ -291,6 +365,7 @@
       }
       ctx.restore();
       ctx.restore();
+      atDepth(ctx, 1 + 0.07 * dolly, 3, this.ex, this.ey, () => this.dust.draw(ctx, lt, [0, 0], dustA, 0.5));
       // darkness closing in: "your whole person is without light"
       if (dim > 0) {
         const g = ctx.createRadialGradient(this.ex, this.ey, lerp(900, 120, dim), this.ex, this.ey, lerp(1300, 700, dim));
@@ -315,6 +390,7 @@
           WC.blob(dx, WC.ellipse(rng() * W, rng() < 0.5 ? rng.range(60, 330) : rng.range(760, 1030), r, r, 8), dropColor, { seed: seed + 10 + i, layers: 12, alpha: 0.1, variance: 0.1 });
         }
         this.drops = d;
+        this.front = depthField(16, seed + 5, { colors: [dropColor], r: [5, 64], a: [0.3, 0.16], mode: 'multiply', vy: -5 });
         if (warm) {
           [this.sun] = layer();
           WC.blob(this.sun.getContext('2d'), WC.ellipse(W / 2, H / 2, 640, 420, 14), 'rgb(250,214,150)', { seed: seed + 3, layers: 34, alpha: 0.04, variance: 0.13 });
@@ -336,6 +412,7 @@
         ctx.restore();
         drawCentered(ctx, this.drops, W / 2, H / 2, 1, ramp(lt, 1.2, 3.2) * 0.85, 'multiply');
         ctx.restore();
+        atDepth(ctx, 1.0 + 0.035 * lt / 7, 4, W / 2, H / 2, () => this.front.draw(ctx, lt, [-lt * 6, 0], ramp(lt, 0.6, 2.5)));
       },
     };
   }
@@ -380,7 +457,16 @@
       WC.blob(hx, WC.ellipse(430, 300, 170, 200, 16), 'rgb(9,9,18)', { seed: 44, layers: 30, alpha: 0.12, variance: 0.01, grain: 0.05 });
       WC.blob(hx, WC.ellipse(440, 720, 430, 230, 18), 'rgb(9,9,18)', { seed: 45, layers: 30, alpha: 0.12, variance: 0.01, grain: 0.05 });
       WC.blob(hx, WC.roundRect(360, 420, 150, 200, 40, 3), 'rgb(9,9,18)', { seed: 46, layers: 24, alpha: 0.14, variance: 0.01, grain: 0.05 });
-      this.head = hd;
+      this.head = WC.blurred(hd, 5);  // out of focus: the camera is focused on the phone
+      // soft shadow the phone casts on the dark behind it
+      const [sh, shx] = layer(700, 1180);
+      shx.filter = 'blur(28px)';
+      shx.fillStyle = 'rgba(0,0,8,0.75)';
+      WC.path(shx, WC.roundRect(90, 90, 520, 1000, 72, 5));
+      shx.fill();
+      this.shadow = sh;
+      this.bokehBg = depthField(46, 48, { colors: ['rgb(120,90,255)', 'rgb(60,170,255)', 'rgb(255,90,200)'], r: [8, 80], a: [0.22, 0.32], vy: -6 });
+      this.glyphSprites = {};
       // floating glyphs that spill out of the phone
       const rng = WC.rng(47);
       this.glyphs = [];
@@ -390,9 +476,21 @@
           t0: ts, a: rng() * Math.PI * 2, sp: rng.range(70, 170), sw: rng.range(0.15, 0.5) * (rng() < 0.5 ? -1 : 1),
           ch: rng.pick(['✦', 'AI', '✧', 'AI', '✦', '#AI', '◆']), size: rng.range(22, 54),
           col: rng.pick(['rgb(140,230,255)', 'rgb(190,150,255)', 'rgb(255,130,220)', 'rgb(150,170,255)']),
-          ox: rng.range(-160, 160), oy: rng.range(-360, 360),
+          ox: rng.range(-160, 160), oy: rng.range(-360, 360), z: rng(),
         });
         ts += lerp(0.5, 0.05, clamp((ts - 31.5) / 17));
+      }
+      // each glyph pre-rendered sharp, slightly soft, and very soft (near the lens)
+      for (const g of this.glyphs) {
+        const key = g.ch + g.col;
+        if (this.glyphSprites[key]) continue;
+        const [gc, gx] = layer(200, 130);
+        gx.fillStyle = g.col;
+        gx.font = '700 80px "DejaVu Sans", sans-serif';
+        gx.textAlign = 'center';
+        gx.textBaseline = 'middle';
+        gx.fillText(g.ch, 100, 65);
+        this.glyphSprites[key] = [gc, WC.blurred(gc, 3), WC.blurred(gc, 9)];
       }
       this.swipes = sfxTimes('swipe');
       this.pings = sfxTimes('ping');
@@ -513,6 +611,8 @@
       zoomAbout(ctx, z, PHONE.x, PHONE.y);
       ctx.drawImage(this.bg, 0, 0);
       glow(ctx, PHONE.x, PHONE.y, 760 + 200 * tension, 'rgba(120,110,255,0.9)', screenOn * (0.3 + 0.3 * tension + 0.18 * pingPulse));
+      this.bokehBg.draw(ctx, lt, [-lt * 4, 0], screenOn * (0.45 + 0.55 * tension));
+      ctx.drawImage(this.shadow, PHONE.x - 350 * PHONE.s + 40, PHONE.y - 590 * PHONE.s + 30, 700 * PHONE.s, 1180 * PHONE.s);
       this.drawPhone(ctx, T, screenOn);
       // ping ripples
       for (const tp of this.pings) {
@@ -527,21 +627,22 @@
         ctx.stroke();
         ctx.restore();
       }
-      // glyphs spilling out and swirling around
+      // glyphs spilling out and swirling around; near ones are big, fast and out of focus
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
-      ctx.textAlign = 'center';
       for (const g of this.glyphs) {
         const age = T - g.t0;
         if (age < 0) continue;
-        const r = 40 + g.sp * age;
+        const depth = 0.55 + 0.9 * g.z;
+        const r = 40 + g.sp * age * depth;
         const a = g.a + g.sw * age;
         const x = PHONE.x + g.ox * 0.5 + Math.cos(a) * r * 1.3;
         const y = PHONE.y + g.oy * 0.5 + Math.sin(a) * r * 0.8;
-        ctx.globalAlpha = ramp(age, 0, 0.4) * (1 - ramp(age, 4, 7)) * 0.85;
-        ctx.fillStyle = g.col;
-        ctx.font = `700 ${g.size}px "DejaVu Sans", sans-serif`;
-        ctx.fillText(g.ch, x, y);
+        const size = g.size * lerp(0.6, 2.4, g.z * g.z);
+        const spr = this.glyphSprites[g.ch + g.col][g.z < 0.45 ? 0 : g.z < 0.8 ? 1 : 2];
+        ctx.globalAlpha = ramp(age, 0, 0.4) * (1 - ramp(age, 4, 7)) * lerp(0.6, 0.9, g.z);
+        const k = size / 80;
+        ctx.drawImage(spr, x - 100 * k, y - 65 * k, 200 * k, 130 * k);
       }
       ctx.restore();
       ctx.restore();
@@ -659,27 +760,35 @@
       this.ghost = g;
       this.specks = Array.from({ length: 70 }, () => [rng.range(-50, 50), rng.range(-100, 100), rng.range(0.6, 1.4), rng.range(-1, 1)]);
       this.birds = Array.from({ length: 6 }, (_, i) => ({ t0: 9 + i * 0.5 + rng() * 0.6, y: rng.range(260, 420), sp: rng.range(150, 200), ph: rng() * 6, s: rng.range(0.7, 1.2) }));
+      // atmospheric depth: distant ranges slightly soft
+      this.far = WC.blurred(this.far, 1.6);
+      this.mid = WC.blurred(this.mid, 0.7);
+      this.fg = grassFG(W + 680, 470, 'rgb(12,24,16)', 69, 9);
+      this.pollen = depthField(55, 70, { colors: ['rgb(255,250,232)'], r: [1.5, 20], a: [0.55, 0.35], vx: 14, vy: -5, twinkle: true });
     },
     draw(ctx, lt, T) {
+      // the camera slides right and eases back; every layer moves by its own depth
       const cam = easeInOut(lt / 24) * (LW - W);
+      const zoom = 1.1 - 0.1 * easeOut(lt / 24);
+      const cx = W / 2, cy = H * 0.62;
+      const L = (img, depth, x, y = 0, alpha = 1) => atDepth(ctx, zoom, depth, cx, cy, () => {
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(img, x, y);
+      });
+      L(this.sky, 0.15, -cam * 0.15);
+      atDepth(ctx, zoom, 0.15, cx, cy, () => {
+        const sunY = lerp(420, 300, easeOut(lt / 24));
+        const sunX = LW * 0.66 - cam * 0.15;
+        glow(ctx, sunX, sunY, 520, 'rgba(255,236,190,0.95)', 0.75);
+        drawCentered(ctx, this.sun, sunX, sunY, 1, 0.95);
+      });
+      L(this.far, 0.3, -cam * 0.3);
+      L(this.mist, 0.4, -cam * 0.4 + lt * 10 - 150, 470, 0.55);
+      L(this.mid, 0.5, -cam * 0.5);
+      L(this.mist, 0.6, -cam * 0.6 - lt * 12 - 100, 640, 0.45);
+      L(this.forest, 0.75, -cam * 0.75);
       ctx.save();
-      zoomAbout(ctx, 1.07 - 0.07 * easeOut(lt / 24));
-      ctx.drawImage(this.sky, -cam * 0.15, 0);
-      const sunY = lerp(420, 300, easeOut(lt / 24));
-      const sunX = LW * 0.66 - cam * 0.15;
-      glow(ctx, sunX, sunY, 520, 'rgba(255,236,190,0.95)', 0.75);
-      drawCentered(ctx, this.sun, sunX, sunY, 1, 0.95);
-      ctx.drawImage(this.far, -cam * 0.3, 0);
-      ctx.save();
-      ctx.globalAlpha = 0.55;
-      ctx.drawImage(this.mist, -cam * 0.4 + lt * 10 - 150, 470);
-      ctx.restore();
-      ctx.drawImage(this.mid, -cam * 0.5, 0);
-      ctx.save();
-      ctx.globalAlpha = 0.45;
-      ctx.drawImage(this.mist, -cam * 0.6 - lt * 12 - 100, 640);
-      ctx.restore();
-      ctx.drawImage(this.forest, -cam * 0.75, 0);
+      zoomAbout(ctx, zoom, cx, cy);
       ctx.drawImage(this.near, -cam, 0);
       // the person, looking out at the view
       const f = this.fig, breathe = 1 + 0.006 * Math.sin(lt * 1.6);
@@ -701,6 +810,7 @@
         ctx.restore();
       }
       ctx.restore();
+      this.pollen.draw(ctx, lt, [-cam * 0.9, 0], 1);
       // birds crossing the sky
       ctx.save();
       ctx.strokeStyle = 'rgba(50,50,70,0.75)';
@@ -718,6 +828,8 @@
         ctx.stroke();
       }
       ctx.restore();
+      // grass right in front of the lens: out of focus, sliding fastest
+      L(this.fg, 1.6, -cam * 1.45, H - this.fg.height + 70);
     },
   };
 
@@ -732,15 +844,19 @@
       this.figX = W / 2;
       this.figY = WC.ridgeY(this.hill.ridge, this.figX) + 10;
       const rng = WC.rng(85);
-      this.motes = Array.from({ length: 70 }, () => [rng() * W, rng() * H, rng.range(10, 40), rng.range(1.5, 4), rng() * 6]);
+      this.motes = depthField(90, 87, { colors: ['rgb(255,248,220)'], r: [1.5, 26], a: [0.6, 0.32], vy: -24, twinkle: true });
+      this.far = WC.blurred(this.far, 1.2);
+      this.fg = grassFG(W + 500, 340, 'rgb(92,66,38)', 88, 9);
       [this.petal] = layer(40, 30);
       WC.blob(this.petal.getContext('2d'), WC.ellipse(20, 15, 14, 8, 10), 'rgb(240,160,170)', { seed: 86, layers: 14, alpha: 0.15, variance: 0.05, grain: 0.1 });
       this.petals = Array.from({ length: 30 }, () => [rng() * W, rng.range(-200, -20), rng.range(50, 90), rng() * 6, rng.range(0.6, 1.2)]);
     },
     draw(ctx, lt, T) {
-      const z = 1 + 0.08 * easeInOut(lt / 16);
+      // a slow push-in toward the figure: sky barely moves, the foreground rushes past
+      const z = 1 + 0.1 * easeInOut(lt / 16);
+      const cx = this.figX, cy = this.figY - 150;
       ctx.save();
-      zoomAbout(ctx, z, this.figX, this.figY - 150);
+      zoomAbout(ctx, 1 + (z - 1) * 0.3, cx, cy);
       ctx.drawImage(this.sky, 0, 0);
       const src = [W / 2, -40], on = ramp(lt, 0.3, 3);
       glow(ctx, src[0], src[1], 900, 'rgba(255,250,225,1)', 0.85 * on);
@@ -776,7 +892,10 @@
       ctx.fillStyle = g;
       ctx.fillRect(src[0] - 300, src[1] + 150, 600, 8);
       ctx.restore();
-      ctx.drawImage(this.far, 0, 0);
+      ctx.restore();
+      atDepth(ctx, z, 0.6, cx, cy, () => ctx.drawImage(this.far, 0, 0));
+      ctx.save();
+      zoomAbout(ctx, z, cx, cy);
       ctx.drawImage(this.hill, 0, 0);
       // the light filling the person
       const aura = ramp(lt, 1, 12);
@@ -800,20 +919,9 @@
       ctx.restore();
       ctx.drawImage(f.canvas, this.figX - f.ox, this.figY - f.oy);
       glow(ctx, this.figX, this.figY - 200, 160, 'rgba(255,245,210,1)', 0.35 * aura, 'screen');
-      // dust motes rising in the light
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      for (const [mx, my, sp, r, ph] of this.motes) {
-        const y = ((my - lt * sp) % H + H) % H;
-        const x = mx + Math.sin(lt * 0.5 + ph) * 20;
-        ctx.globalAlpha = (0.4 + 0.4 * Math.sin(lt * 2 + ph)) * on;
-        ctx.fillStyle = 'rgb(255,248,220)';
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
       ctx.restore();
-      ctx.restore();
+      // dust motes rising in the light, at every distance
+      this.motes.draw(ctx, lt, [0, 0], on);
       // petals of mercy and compassion
       const pt = lt - 12.6;
       if (pt > 0) {
@@ -829,6 +937,7 @@
           ctx.restore();
         }
       }
+      atDepth(ctx, z, 1.8, cx, cy, () => ctx.drawImage(this.fg, -250, H - this.fg.height + 50));
     },
   };
 
@@ -904,6 +1013,29 @@
       px.fillRect(70, 11, 420, 3);
       this.pen = pen;
       this.flips = sfxTimes('page');
+      // shallow depth of field: the desk is soft, the notebook sharp
+      this.desk = WC.blurred(this.desk, 2.5, true);
+      // out-of-focus things close to the camera: a mug of coffee and a sprig of leaves
+      const [mug, mx] = layer(620, 620);
+      WC.blob(mx, WC.ellipse(310, 310, 250, 250, 16), 'rgb(232,222,206)', { seed: 1200, layers: 20, alpha: 0.14, variance: 0.01, grain: 0.1 });
+      WC.blob(mx, WC.ellipse(310, 310, 205, 205, 16), 'rgb(92,56,34)', { seed: 1201, layers: 20, alpha: 0.14, variance: 0.01, grain: 0.1 });
+      WC.blob(mx, WC.ellipse(270, 270, 90, 60, 12), 'rgb(150,100,60)', { seed: 1202, layers: 12, alpha: 0.06, variance: 0.06 });
+      this.mug = WC.blurred(mug, 14);
+      const [lv, lx] = layer(700, 600);
+      lx.strokeStyle = 'rgb(60,80,40)';
+      lx.lineWidth = 10;
+      lx.beginPath();
+      lx.moveTo(680, 590);
+      lx.quadraticCurveTo(420, 380, 120, 120);
+      lx.stroke();
+      const lr = WC.rng(1203);
+      for (let i = 0; i < 9; i++) {
+        const u = 0.15 + i * 0.09, px = lerp(680, 120, u), py = lerp(590, 120, u) + Math.sin(u * 3) * 40;
+        const side = i % 2 ? 1 : -1, ang = -2.3 + side * 0.9;
+        WC.blob(lx, WC.ellipse(px + Math.cos(ang) * 55, py + Math.sin(ang) * 55, 70, 26, 10, ang), lr() < 0.5 ? 'rgb(84,120,60)' : 'rgb(110,140,70)', { seed: 1210 + i, layers: 14, alpha: 0.13, variance: 0.03, grain: 0.1 });
+      }
+      this.leaves = WC.blurred(lv, 11);
+      this.dust = depthField(45, 95, { colors: ['rgb(255,236,200)'], r: [1, 14], a: [0.5, 0.3], vx: 6, vy: 3, twinkle: true });
     },
     // draws a page squashed horizontally, anchored at the spine (side 1 = right, -1 = left)
     drawPage(ctx, img, spineX, top, width, side, shade) {
@@ -924,7 +1056,8 @@
       ctx.restore();
     },
     draw(ctx, lt, T) {
-      ctx.drawImage(this.desk, 0, 0);
+      const push = easeInOut(lt / 11);
+      atDepth(ctx, 1 + 0.07 * push, 0.4, W / 2 + 300, 470, () => ctx.drawImage(this.desk, -20, -12, W + 40, H + 24));
       const cx = W / 2, cy = 470;
       ctx.save();
       zoomAbout(ctx, 1 + 0.07 * easeInOut(lt / 11), cx + 300, cy);
@@ -1019,6 +1152,12 @@
       ctx.restore();
       // warm lamp light from the top-left
       glow(ctx, 300, 120, 1100, 'rgba(255,214,150,0.9)', 0.25, 'soft-light');
+      this.dust.draw(ctx, lt, [0, 0], 0.8);
+      // foreground objects slide out of frame faster than the notebook as we push in
+      atDepth(ctx, 1 + 0.07 * push, 3.2, W / 2 + 300, 470, () => {
+        ctx.drawImage(this.mug, -330, -330);
+        ctx.drawImage(this.leaves, W - 520, H - 330);
+      });
     },
   };
 
@@ -1034,10 +1173,16 @@
       this.lamp = paintLamp(115);
       const rng = WC.rng(116);
       this.stars = Array.from({ length: 140 }, () => [rng() * W, Math.pow(rng(), 1.6) * 520, rng.range(0.8, 2.6), rng() * 6, rng.range(0.5, 1)]);
+      this.far = WC.blurred(this.far, 1.2);
+      this.fg = grassFG(W + 600, 360, 'rgb(14,11,22)', 118, 8);
+      this.fireflies = depthField(40, 117, { colors: ['rgb(255,214,120)'], r: [2, 22], a: [0.75, 0.45], vx: 5, vy: -7, twinkle: true });
     },
     draw(ctx, lt, T) {
+      // the camera pulls back: near layers shrink faster than the far sky
+      const zoom = 1.14 - 0.14 * easeOut(lt / 13);
+      const cx = W / 2, cy = H * 0.75;
       ctx.save();
-      zoomAbout(ctx, 1.1 - 0.1 * easeOut(lt / 13), W / 2, H * 0.75);
+      zoomAbout(ctx, 1 + (zoom - 1) * 0.2, cx, cy);
       ctx.drawImage(this.sky, 0, 0);
       const st = ramp(lt, 0.8, 5);
       ctx.save();
@@ -1050,8 +1195,11 @@
       }
       ctx.restore();
       glow(ctx, W * 0.5, 760, 900, 'rgba(255,190,140,0.8)', 0.4);
-      ctx.drawImage(this.far, 0, 0);
-      ctx.drawImage(this.mid, 0, 0);
+      ctx.restore();
+      atDepth(ctx, zoom, 0.45, cx, cy, () => ctx.drawImage(this.far, 0, 0));
+      atDepth(ctx, zoom, 0.7, cx, cy, () => ctx.drawImage(this.mid, 0, 0));
+      ctx.save();
+      zoomAbout(ctx, zoom, cx, cy);
       ctx.drawImage(this.ledge, 0, 0);
       const ls = 1.55, lx = W / 2 - 190 * ls, ly = 940 - 172 * ls;
       const wx = lx + this.lamp.wick[0] * ls, wy = ly + this.lamp.wick[1] * ls;
@@ -1062,6 +1210,8 @@
       flame(ctx, wx, wy + 4, 74 * lit * (1 + 0.15 * amen), T, 7);
       glow(ctx, wx, wy - 26, 70, 'rgba(255,240,200,1)', lit * 0.8);
       ctx.restore();
+      this.fireflies.draw(ctx, lt, [0, 0], ramp(lt, 1.5, 5));
+      atDepth(ctx, zoom, 1.8, cx, cy, () => ctx.drawImage(this.fg, -300, H - this.fg.height + 50));
     },
     captionY: 0.17,
   };

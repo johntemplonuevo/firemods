@@ -267,6 +267,38 @@
     return c;
   };
 
+  // ---------- depth helpers ----------
+  // a blurred copy (for out-of-focus layers); the sharp image is kept underneath
+  // so the edges of an opaque layer don't turn see-through
+  WC.blurred = function (src, px, keepEdges = false) {
+    const c = WC.canvas(src.width, src.height), x = c.getContext('2d');
+    x.filter = `blur(${px}px)`;
+    x.drawImage(src, 0, 0);
+    if (keepEdges) {
+      x.filter = 'none';
+      x.globalCompositeOperation = 'destination-over';
+      x.drawImage(src, 0, 0);
+    }
+    return c;
+  };
+
+  // a round out-of-focus light (soft = 0 crisp disc ... 1 pure glow)
+  const bokehCache = {};
+  WC.bokeh = function (color, soft) {
+    const key = color + soft;
+    if (bokehCache[key]) return bokehCache[key];
+    const c = WC.canvas(64, 64), x = c.getContext('2d');
+    const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    const col = (a) => color.replace('rgb(', 'rgba(').replace(')', `,${a})`);
+    g.addColorStop(0, col(1));
+    g.addColorStop(Math.max(0.05, 0.9 - soft * 0.85), col(soft > 0.7 ? 0.45 : 0.8));
+    g.addColorStop(1, col(0));
+    x.fillStyle = g;
+    x.fillRect(0, 0, 64, 64);
+    bokehCache[key] = c;
+    return c;
+  };
+
   // ---------- landscape helpers ----------
   // returns ridge points from x0..x1 (left to right) by midpoint displacement
   WC.ridge = function (x0, x1, y, amp, rough, seed, levels = 7) {
